@@ -1,0 +1,8 @@
+**/.expo/**
+**/.next/**
+**/.pnpm/**
+**/.turbo/**
+**/android/**
+**/dist/**
+**/ios/**
+**/node_modules/**
