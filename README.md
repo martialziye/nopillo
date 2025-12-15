@@ -7,6 +7,23 @@ L’objectif principal est de produire une **vue cohérente, réconciliée et ex
 
 ---
 
+## Choix techniques
+
+- **NestJS / TypeScript**  
+  Choisi pour sa structuration modulaire, sa testabilité et son adéquation avec des APIs backend complexes.
+
+- **Normalisation + Réconciliation**  
+  Séparation claire entre :
+  - l’ingestion des événements,
+  - leur normalisation,
+  - et la réconciliation pour produire une vue cohérente.
+
+- **Zod pour la validation**  
+  Utilisé pour une validation minimale en entrée, adaptée aux webhooks imparfaits.
+
+- **Stockage en mémoire**  
+  Suffisant pour un prototype, permettant de se concentrer sur la logique métier.
+
 ## Architecture générale
 
 L’architecture repose sur une séparation claire des responsabilités :
@@ -30,6 +47,12 @@ L’architecture repose sur une séparation claire des responsabilités :
 
 - **Read model**  
   Les données réconciliées sont exposées via une API permettant d’accéder au solde global, au détail par compte et à une timeline consolidée.
+
+### Backend helpers (pipes & logging)
+
+- Validation pipe for schemas: `backend/src/_common/pipes/zod-validation.pipe.ts` lets you plug Zod schemas directly in controllers, e.g. `@Body(new ZodValidationPipe(MySchema)) payload`.
+- Request logging: `backend/src/_common/interceptors/logging.interceptor.ts` adds structured logs per request; enabled globally in `backend/src/main.ts`.
+- Structured logging config: Winston is wired with Datadog-friendly formatter in `backend/src/_common/logging.ts`, configured in `backend/src/app.module.ts`.
 
 ---
 
@@ -97,9 +120,16 @@ Lors de l’ingestion d’un événement :
 2. **Retry identique (fingerprint identique)**  
    L’événement est marqué `DUPLICATE` et ignoré pour les calculs.
 
-3. **Correction / mise à jour (fingerprint différent)**  
-   Les deux versions sont comparées.  
-   La version la plus fiable est conservée et l’ancienne est marquée `SUPERSEDED`.
+3. **Correction ou mise à jour (fingerprint différent)**  
+   Les deux versions de l’événement sont comparées afin de déterminer laquelle est la plus fiable :
+   - Une version `VALID` est toujours prioritaire sur une version `INCOMPLETE`
+   - À statut égal, la version avec le **score de complétude le plus élevé** est retenue
+   - En cas d’égalité, la règle _last write wins_ est appliquée
+
+   - Si la nouvelle version est jugée **plus fiable**, elle remplace l’ancienne,  
+     qui est alors marquée `SUPERSEDED`
+   - Si la nouvelle version est **moins complète ou moins fiable**, elle est ignorée  
+     et l’événement existant reste la version de référence
 
 ### Sélection de la version gagnante
 
@@ -115,7 +145,7 @@ La décision repose sur :
 
 Les événements incomplets sont :
 
-- acceptés par l’API (`202 Accepted`),
+- acceptés par l’API,
 - stockés et visibles dans la timeline,
 - exclus des calculs de solde tant qu’ils ne sont pas complétés.
 
@@ -162,11 +192,43 @@ Des tests end-to-end (Jest + Supertest) couvrent les cas principaux :
 
 ---
 
-## Limites et évolutions possibles
+## Limites de la solution
 
-- Stockage en mémoire (prototype)
-- Pas de valorisation crypto temps réel
+- Pas de persistance en base de données
+- Pas de valorisation crypto en temps réel
 - Pas de gestion multi-devises
 - Pas de mécanisme de correction manuelle
+- Pas de gestion de concurrence ou de scalabilité
+
+---
+
+## Améliorations possibles avec plus de temps
+
+- Persistance des événements (PostgreSQL + index sur dedupeKey)
+- Intégration d’un service de pricing pour les actifs crypto
+- Support multi-devises et taux de change
+- Gestion avancée des conflits (priorité par source, versioning)
+- Monitoring et métriques (latence, taux de duplication)
 
 Ces limites sont assumées afin de concentrer l’exercice sur la **logique de réconciliation et de cohérence des données**.
+
+## Lancer le projet en local
+
+### Prérequis
+
+- Node.js >= 18
+- pnpm
+
+### Installation
+
+pnpm install
+
+### Lancer l'application
+
+pnpm run dev
+
+### Lancer les tests end-to-end
+
+pnpm run test:e2e
+
+---
