@@ -88,7 +88,6 @@ export class WealthEventsService {
         if (e.eventType === 'INSURANCE_PAYOUT') acc.balanceEUR += e.amount;
       }
 
-      // crypto (track asset amount; optional use fiatValue for global)
       if (e.asset && typeof e.amount === 'number') {
         acc.assets[e.asset] = (acc.assets[e.asset] ?? 0) + e.amount;
       }
@@ -103,7 +102,6 @@ export class WealthEventsService {
     const accounts = this.getAccounts(userId);
     const totalEUR = accounts.reduce((s, a) => s + a.balanceEUR, 0);
 
-    // Bonus: include crypto fiatValue if provided
     const cryptoEUR = this.getEffectiveEvents(userId)
       .filter((e) => typeof e.fiatValue === 'number' && e.currency === 'EUR')
       .reduce(
