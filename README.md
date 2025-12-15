@@ -1,98 +1,172 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Service de gestion de patrimoine – Backend
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Ce projet est un **prototype backend NestJS** permettant de consolider le patrimoine financier d’un utilisateur à partir d’événements financiers envoyés par des sources externes hétérogènes (banques, plateformes crypto, assureurs).
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+Le système est conçu pour fonctionner dans un contexte réaliste de **webhooks imparfaits** : événements incomplets, dupliqués, reçus hors ordre, ou corrigés a posteriori.  
+L’objectif principal est de produire une **vue cohérente, réconciliée et exploitable du patrimoine** à partir de ces flux.
 
-## Description
+---
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
+## Architecture générale
 
-## Project setup
+L’architecture repose sur une séparation claire des responsabilités :
 
-```bash
-$ pnpm install
-```
+- **Ingestion**  
+  Réception des événements externes via des endpoints dédiés par provider.
 
-## Compile and run the project
+- **Validation minimale**  
+  La validation en entrée vérifie uniquement les champs nécessaires à l’identification et au routage de l’événement.  
+  Les champs métier (montants, type d’opération, devise…) peuvent être absents.
 
-```bash
-# development
-$ pnpm run start
+- **Normalisation**  
+  Chaque payload externe est transformé en un modèle interne unifié (`NormalizedEvent`), indépendant du format d’origine.
 
-# watch mode
-$ pnpm run start:dev
+- **Réconciliation**  
+  Une couche dédiée assure la cohérence globale des données :
+  - idempotence,
+  - gestion des corrections,
+  - gestion des événements incomplets,
+  - prise en compte des événements reçus en retard.
 
-# production mode
-$ pnpm run start:prod
-```
+- **Read model**  
+  Les données réconciliées sont exposées via une API permettant d’accéder au solde global, au détail par compte et à une timeline consolidée.
 
-## Run tests
+---
 
-```bash
-# unit tests
-$ pnpm run test
+## Modèle d’événement unifié
 
-# e2e tests
-$ pnpm run test:e2e
+Tous les événements sont normalisés dans un format commun, contenant notamment :
 
-# test coverage
-$ pnpm run test:cov
-```
+- **Identification**
+  - `userId`
+  - `sourceType` (`BANK`, `CRYPTO`, `INSURER`)
+  - `sourceName` (BNP, Coinbase, AXA…)
+  - `sourceEventId` (txnId, id externe…)
 
-## Deployment
+- **Données métier**
+  - `accountId`
+  - `timestamp`
+  - `eventType`
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+- **Fiat**
+  - `amount`
+  - `currency`
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+- **Crypto**
+  - `asset`
+  - `assetAmount`
+  - `fiatValue` (estimation fournie par la plateforme)
 
-```bash
-$ pnpm install -g @nestjs/mau
-$ mau deploy
-```
+- **Métadonnées de cohérence**
+  - `dedupeKey`
+  - `fingerprint`
+  - `completenessScore`
+  - `status` (`VALID`, `INCOMPLETE`, `DUPLICATE`, `SUPERSEDED`)
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+- **Traçabilité**
+  - `raw` (payload original)
 
-## Resources
+---
 
-Check out a few resources that may come in handy when working with NestJS:
+## DedupeKey et Fingerprint
 
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
+### DedupeKey – identité logique
 
-## Support
+Le `dedupeKey` représente l’identité stable d’une transaction externe :
 
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
+Il permet de garantir l’idempotence et d’identifier les retries webhook.
 
-## Stay in touch
+### Fingerprint – version de contenu
 
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+Le `fingerprint` est un hash des champs métier significatifs (montant, type, asset, timestamp, etc.).
 
-## License
+Il permet de distinguer :
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+- un **retry strict** (contenu identique),
+- d’une **correction ou mise à jour** (contenu différent pour la même transaction).
+
+---
+
+## Réconciliation des événements
+
+Lors de l’ingestion d’un événement :
+
+1. **Nouvel événement (dedupeKey inconnu)**  
+   L’événement est stocké et marqué `VALID` ou `INCOMPLETE` selon sa complétude.
+
+2. **Retry identique (fingerprint identique)**  
+   L’événement est marqué `DUPLICATE` et ignoré pour les calculs.
+
+3. **Correction / mise à jour (fingerprint différent)**  
+   Les deux versions sont comparées.  
+   La version la plus fiable est conservée et l’ancienne est marquée `SUPERSEDED`.
+
+### Sélection de la version gagnante
+
+La décision repose sur :
+
+1. `VALID` prioritaire sur `INCOMPLETE`
+2. Score de complétude le plus élevé (`completenessScore`)
+3. En cas d’égalité : _last write wins_
+
+---
+
+## Gestion des événements incomplets
+
+Les événements incomplets sont :
+
+- acceptés par l’API (`202 Accepted`),
+- stockés et visibles dans la timeline,
+- exclus des calculs de solde tant qu’ils ne sont pas complétés.
+
+Ce choix permet de refléter fidèlement le comportement réel des flux webhook.
+
+---
+
+## Spécificité des événements crypto
+
+Pour les événements crypto :
+
+- `asset` et `assetAmount` représentent la position réelle,
+- `fiatValue` correspond à une estimation fournie par la plateforme au moment de la transaction.
+
+`fiatValue` n’est **pas assimilé à une valorisation actuelle du portefeuille** et est exposé à titre informatif uniquement.  
+Une valorisation temps réel nécessiterait un service de pricing externe, hors périmètre de ce prototype.
+
+---
+
+## API exposée
+
+### Ingestion
+
+- `POST /webhooks/bankx`
+- `POST /webhooks/crypto`
+- `POST /webhooks/insurer`
+
+### Lecture du patrimoine
+
+- `GET /wealth/{userId}/balance`
+- `GET /wealth/{userId}/accounts`
+- `GET /wealth/{userId}/timeline`
+
+---
+
+## Tests
+
+Des tests end-to-end (Jest + Supertest) couvrent les cas principaux :
+
+- déduplication des événements,
+- corrections et mises à jour,
+- événements incomplets,
+- événements reçus hors ordre chronologique.
+
+---
+
+## Limites et évolutions possibles
+
+- Stockage en mémoire (prototype)
+- Pas de valorisation crypto temps réel
+- Pas de gestion multi-devises
+- Pas de mécanisme de correction manuelle
+
+Ces limites sont assumées afin de concentrer l’exercice sur la **logique de réconciliation et de cohérence des données**.
